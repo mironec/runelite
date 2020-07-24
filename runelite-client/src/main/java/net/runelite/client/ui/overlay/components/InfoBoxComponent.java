@@ -29,12 +29,13 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
-import java.awt.Image;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.image.BufferedImage;
 import lombok.Getter;
 import lombok.Setter;
 import net.runelite.client.ui.FontManager;
+import net.runelite.client.ui.overlay.infobox.InfoBox;
 
 @Setter
 public class InfoBoxComponent implements LayoutableRenderableEntity
@@ -53,7 +54,9 @@ public class InfoBoxComponent implements LayoutableRenderableEntity
 	private String text;
 	private Color color = Color.WHITE;
 	private Color backgroundColor = ComponentConstants.STANDARD_BACKGROUND_COLOR;
-	private Image image;
+	private BufferedImage image;
+	@Getter
+	private InfoBox infoBox;
 
 	@Override
 	public Dimension render(Graphics2D graphics)

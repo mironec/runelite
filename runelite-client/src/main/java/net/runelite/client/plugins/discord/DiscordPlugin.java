@@ -43,9 +43,8 @@ import net.runelite.api.GameState;
 import net.runelite.api.Skill;
 import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.events.ConfigChanged;
-import net.runelite.api.events.ExperienceChanged;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.config.ConfigManager;
@@ -54,6 +53,7 @@ import net.runelite.client.discord.events.DiscordJoinGame;
 import net.runelite.client.discord.events.DiscordJoinRequest;
 import net.runelite.client.discord.events.DiscordReady;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.PartyChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -65,12 +65,12 @@ import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.ws.PartyMember;
 import net.runelite.client.ws.PartyService;
 import net.runelite.client.ws.WSClient;
-import net.runelite.http.api.RuneLiteAPI;
 import net.runelite.http.api.ws.messages.party.UserJoin;
 import net.runelite.http.api.ws.messages.party.UserPart;
 import net.runelite.http.api.ws.messages.party.UserSync;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 
@@ -92,9 +92,6 @@ public class DiscordPlugin extends Plugin
 	private ClientToolbar clientToolbar;
 
 	@Inject
-	private RuneLiteProperties properties;
-
-	@Inject
 	private DiscordState discordState;
 
 	@Inject
@@ -105,6 +102,9 @@ public class DiscordPlugin extends Plugin
 
 	@Inject
 	private WSClient wsClient;
+
+	@Inject
+	private OkHttpClient okHttpClient;
 
 	private Map<Skill, Integer> skillExp = new HashMap<>();
 	private NavigationButton discordButton;
@@ -125,7 +125,7 @@ public class DiscordPlugin extends Plugin
 			.tab(false)
 			.tooltip("Join Discord")
 			.icon(icon)
-			.onClick(() -> LinkBrowser.browse(properties.getDiscordInvite()))
+			.onClick(() -> LinkBrowser.browse(RuneLiteProperties.getDiscordInvite()))
 			.build();
 
 		clientToolbar.addNavigation(discordButton);
@@ -184,17 +184,18 @@ public class DiscordPlugin extends Plugin
 	}
 
 	@Subscribe
-	public void onExperienceChanged(ExperienceChanged event)
+	public void onStatChanged(StatChanged statChanged)
 	{
-		final int exp = client.getSkillExperience(event.getSkill());
-		final Integer previous = skillExp.put(event.getSkill(), exp);
+		final Skill skill = statChanged.getSkill();
+		final int exp = statChanged.getXp();
+		final Integer previous = skillExp.put(skill, exp);
 
 		if (previous == null || previous >= exp)
 		{
 			return;
 		}
 
-		final DiscordGameEventType discordGameEventType = DiscordGameEventType.fromSkill(event.getSkill());
+		final DiscordGameEventType discordGameEventType = DiscordGameEventType.fromSkill(skill);
 
 		if (discordGameEventType != null && config.showSkillingActivity())
 		{
@@ -275,7 +276,7 @@ public class DiscordPlugin extends Plugin
 			.url(url)
 			.build();
 
-		RuneLiteAPI.CLIENT.newCall(request).enqueue(new Callback()
+		okHttpClient.newCall(request).enqueue(new Callback()
 		{
 			@Override
 			public void onFailure(Call call, IOException e)
@@ -294,7 +295,11 @@ public class DiscordPlugin extends Plugin
 					}
 
 					final InputStream inputStream = response.body().byteStream();
-					final BufferedImage image = ImageIO.read(inputStream);
+					final BufferedImage image;
+					synchronized (ImageIO.class)
+					{
+						image = ImageIO.read(inputStream);
+					}
 					memberById.setAvatar(image);
 				}
 				finally
@@ -379,7 +384,28 @@ public class DiscordPlugin extends Plugin
 			return;
 		}
 
-		final DiscordGameEventType discordGameEventType = DiscordGameEventType.fromRegion(playerRegionID);
+		final EnumSet<WorldType> worldType = client.getWorldType();
+
+		if (worldType.contains(WorldType.DEADMAN))
+		{
+			discordState.triggerEvent(DiscordGameEventType.PLAYING_DEADMAN);
+			return;
+		}
+		else if (WorldType.isPvpWorld(worldType))
+		{
+			discordState.triggerEvent(DiscordGameEventType.PLAYING_PVP);
+			return;
+		}
+
+		DiscordGameEventType discordGameEventType = DiscordGameEventType.fromRegion(playerRegionID);
+
+		// NMZ uses the same region ID as KBD. KBD is always on plane 0 and NMZ is always above plane 0
+		// Since KBD requires going through the wilderness there is no EventType for it
+		if (DiscordGameEventType.MG_NIGHTMARE_ZONE == discordGameEventType
+			&& client.getLocalPlayer().getWorldLocation().getPlane() == 0)
+		{
+			discordGameEventType = null;
+		}
 
 		if (discordGameEventType == null)
 		{
@@ -399,17 +425,6 @@ public class DiscordPlugin extends Plugin
 	private boolean showArea(final DiscordGameEventType event)
 	{
 		if (event == null)
-		{
-			return false;
-		}
-
-		final EnumSet<WorldType> worldType = client.getWorldType();
-
-		// Do not show location in PVP activities
-		if (worldType.contains(WorldType.SEASONAL_DEADMAN) ||
-			worldType.contains(WorldType.DEADMAN) ||
-			worldType.contains(WorldType.PVP) ||
-			worldType.contains(WorldType.PVP_HIGH_RISK))
 		{
 			return false;
 		}

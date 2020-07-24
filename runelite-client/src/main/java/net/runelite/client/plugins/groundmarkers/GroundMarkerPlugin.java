@@ -38,16 +38,15 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.KeyCode;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Tile;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
@@ -68,14 +67,11 @@ public class GroundMarkerPlugin extends Plugin
 {
 	private static final String CONFIG_GROUP = "groundMarker";
 	private static final String MARK = "Mark tile";
+	private static final String UNMARK = "Unmark tile";
 	private static final String WALK_HERE = "Walk here";
 	private static final String REGION_PREFIX = "region_";
 
 	private static final Gson GSON = new Gson();
-
-	@Getter(AccessLevel.PACKAGE)
-	@Setter(AccessLevel.PACKAGE)
-	private boolean hotKeyPressed;
 
 	@Getter(AccessLevel.PACKAGE)
 	private final List<ColorTileMarker> points = new ArrayList<>();
@@ -87,9 +83,6 @@ public class GroundMarkerPlugin extends Plugin
 	private GroundMarkerConfig config;
 
 	@Inject
-	private GroundMarkerInputListener inputListener;
-
-	@Inject
 	private ConfigManager configManager;
 
 	@Inject
@@ -97,6 +90,9 @@ public class GroundMarkerPlugin extends Plugin
 
 	@Inject
 	private GroundMarkerOverlay overlay;
+
+	@Inject
+	private GroundMarkerMinimapOverlay minimapOverlay;
 
 	@Inject
 	private KeyManager keyManager;
@@ -192,27 +188,29 @@ public class GroundMarkerPlugin extends Plugin
 	}
 
 	@Subscribe
-	public void onFocusChanged(FocusChanged focusChanged)
-	{
-		if (!focusChanged.isFocused())
-		{
-			hotKeyPressed = false;
-		}
-	}
-
-	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
+		final boolean hotKeyPressed = client.isKeyPressed(KeyCode.KC_SHIFT);
 		if (hotKeyPressed && event.getOption().equals(WALK_HERE))
 		{
+			final Tile selectedSceneTile = client.getSelectedSceneTile();
+
+			if (selectedSceneTile == null)
+			{
+				return;
+			}
+
 			MenuEntry[] menuEntries = client.getMenuEntries();
 			menuEntries = Arrays.copyOf(menuEntries, menuEntries.length + 1);
-
 			MenuEntry menuEntry = menuEntries[menuEntries.length - 1] = new MenuEntry();
 
-			menuEntry.setOption(MARK);
+			final WorldPoint worldPoint = WorldPoint.fromLocalInstance(client, selectedSceneTile.getLocalLocation());
+			final int regionId = worldPoint.getRegionID();
+			final GroundMarkerPoint point = new GroundMarkerPoint(regionId, worldPoint.getRegionX(), worldPoint.getRegionY(), client.getPlane(), config.markerColor());
+
+			menuEntry.setOption(getPoints(regionId).contains(point) ? UNMARK : MARK);
 			menuEntry.setTarget(event.getTarget());
-			menuEntry.setType(MenuAction.CANCEL.getId());
+			menuEntry.setType(MenuAction.RUNELITE.getId());
 
 			client.setMenuEntries(menuEntries);
 		}
@@ -221,7 +219,8 @@ public class GroundMarkerPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
-		if (!event.getMenuOption().equals(MARK))
+		if (event.getMenuAction().getId() != MenuAction.RUNELITE.getId() ||
+			!(event.getMenuOption().equals(MARK) || event.getMenuOption().equals(UNMARK)))
 		{
 			return;
 		}
@@ -238,7 +237,7 @@ public class GroundMarkerPlugin extends Plugin
 	protected void startUp()
 	{
 		overlayManager.add(overlay);
-		keyManager.registerKeyListener(inputListener);
+		overlayManager.add(minimapOverlay);
 		loadPoints();
 	}
 
@@ -246,7 +245,7 @@ public class GroundMarkerPlugin extends Plugin
 	protected void shutDown()
 	{
 		overlayManager.remove(overlay);
-		keyManager.unregisterKeyListener(inputListener);
+		overlayManager.remove(minimapOverlay);
 		points.clear();
 	}
 
